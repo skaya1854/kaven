@@ -58,6 +58,21 @@ const SLASH_COMMAND_SPECS: &[SlashCommandSpec] = &[
         summary: "Show or switch the active model",
         argument_hint: Some("[model]"),
     },
+    SlashCommandSpec {
+        name: "permissions",
+        summary: "Show or switch the active permission mode",
+        argument_hint: Some("[read-only|workspace-write|danger-full-access]"),
+    },
+    SlashCommandSpec {
+        name: "clear",
+        summary: "Start a fresh local session",
+        argument_hint: None,
+    },
+    SlashCommandSpec {
+        name: "cost",
+        summary: "Show cumulative token usage for this session",
+        argument_hint: None,
+    },
 ];
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -66,6 +81,9 @@ pub enum SlashCommand {
     Status,
     Compact,
     Model { model: Option<String> },
+    Permissions { mode: Option<String> },
+    Clear,
+    Cost,
     Unknown(String),
 }
 
@@ -86,6 +104,11 @@ impl SlashCommand {
             "model" => Self::Model {
                 model: parts.next().map(ToOwned::to_owned),
             },
+            "permissions" => Self::Permissions {
+                mode: parts.next().map(ToOwned::to_owned),
+            },
+            "clear" => Self::Clear,
+            "cost" => Self::Cost,
             other => Self::Unknown(other.to_string()),
         })
     }
@@ -141,7 +164,12 @@ pub fn handle_slash_command(
             message: render_slash_command_help(),
             session: session.clone(),
         }),
-        SlashCommand::Status | SlashCommand::Model { .. } | SlashCommand::Unknown(_) => None,
+        SlashCommand::Status
+        | SlashCommand::Model { .. }
+        | SlashCommand::Permissions { .. }
+        | SlashCommand::Clear
+        | SlashCommand::Cost
+        | SlashCommand::Unknown(_) => None,
     }
 }
 
@@ -166,6 +194,14 @@ mod tests {
             SlashCommand::parse("/model"),
             Some(SlashCommand::Model { model: None })
         );
+        assert_eq!(
+            SlashCommand::parse("/permissions read-only"),
+            Some(SlashCommand::Permissions {
+                mode: Some("read-only".to_string()),
+            })
+        );
+        assert_eq!(SlashCommand::parse("/clear"), Some(SlashCommand::Clear));
+        assert_eq!(SlashCommand::parse("/cost"), Some(SlashCommand::Cost));
     }
 
     #[test]
@@ -175,7 +211,10 @@ mod tests {
         assert!(help.contains("/status"));
         assert!(help.contains("/compact"));
         assert!(help.contains("/model [model]"));
-        assert_eq!(slash_command_specs().len(), 4);
+        assert!(help.contains("/permissions [read-only|workspace-write|danger-full-access]"));
+        assert!(help.contains("/clear"));
+        assert!(help.contains("/cost"));
+        assert_eq!(slash_command_specs().len(), 7);
     }
 
     #[test]
@@ -225,5 +264,13 @@ mod tests {
         assert!(
             handle_slash_command("/model claude", &session, CompactionConfig::default()).is_none()
         );
+        assert!(handle_slash_command(
+            "/permissions read-only",
+            &session,
+            CompactionConfig::default()
+        )
+        .is_none());
+        assert!(handle_slash_command("/clear", &session, CompactionConfig::default()).is_none());
+        assert!(handle_slash_command("/cost", &session, CompactionConfig::default()).is_none());
     }
 }

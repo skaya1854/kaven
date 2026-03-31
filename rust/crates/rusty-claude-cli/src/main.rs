@@ -323,6 +323,9 @@ impl LiveCli {
             SlashCommand::Status => self.print_status(),
             SlashCommand::Compact => self.compact()?,
             SlashCommand::Model { model } => self.set_model(model)?,
+            SlashCommand::Permissions { mode } => self.set_permissions(mode)?,
+            SlashCommand::Clear => self.clear_session()?,
+            SlashCommand::Cost => self.print_cost(),
             SlashCommand::Unknown(name) => eprintln!("unknown slash command: /{name}"),
         }
         Ok(())
@@ -363,14 +366,68 @@ impl LiveCli {
         Ok(())
     }
 
+    fn set_permissions(&mut self, mode: Option<String>) -> Result<(), Box<dyn std::error::Error>> {
+        let Some(mode) = mode else {
+            println!("Current permission mode: {}", permission_mode_label());
+            return Ok(());
+        };
+
+        let normalized = normalize_permission_mode(&mode).ok_or_else(|| {
+            format!(
+                "Unsupported permission mode '{mode}'. Use read-only, workspace-write, or danger-full-access."
+            )
+        })?;
+
+        if normalized == permission_mode_label() {
+            println!("Permission mode already set to {normalized}.");
+            return Ok(());
+        }
+
+        let session = self.runtime.session().clone();
+        self.runtime = build_runtime_with_permission_mode(
+            session,
+            self.model.clone(),
+            self.system_prompt.clone(),
+            true,
+            normalized,
+        )?;
+        println!("Switched permission mode to {normalized}.");
+        Ok(())
+    }
+
+    fn clear_session(&mut self) -> Result<(), Box<dyn std::error::Error>> {
+        self.runtime = build_runtime_with_permission_mode(
+            Session::new(),
+            self.model.clone(),
+            self.system_prompt.clone(),
+            true,
+            permission_mode_label(),
+        )?;
+        println!("Cleared local session history.");
+        Ok(())
+    }
+
+    fn print_cost(&self) {
+        let cumulative = self.runtime.usage().cumulative_usage();
+        println!(
+            "cost: input_tokens={} output_tokens={} cache_creation_tokens={} cache_read_tokens={} total_tokens={}",
+            cumulative.input_tokens,
+            cumulative.output_tokens,
+            cumulative.cache_creation_input_tokens,
+            cumulative.cache_read_input_tokens,
+            cumulative.total_tokens(),
+        );
+    }
+
     fn compact(&mut self) -> Result<(), Box<dyn std::error::Error>> {
         let result = self.runtime.compact(CompactionConfig::default());
         let removed = result.removed_message_count;
-        self.runtime = build_runtime(
+        self.runtime = build_runtime_with_permission_mode(
             result.compacted_session,
             self.model.clone(),
             self.system_prompt.clone(),
             true,
+            permission_mode_label(),
         )?;
         println!("Compacted {removed} messages.");
         Ok(())
@@ -403,9 +460,19 @@ fn format_status_line(
     )
 }
 
+fn normalize_permission_mode(mode: &str) -> Option<&'static str> {
+    match mode.trim() {
+        "read-only" => Some("read-only"),
+        "workspace-write" => Some("workspace-write"),
+        "danger-full-access" => Some("danger-full-access"),
+        _ => None,
+    }
+}
+
 fn permission_mode_label() -> &'static str {
     match env::var("RUSTY_CLAUDE_PERMISSION_MODE") {
         Ok(value) if value == "read-only" => "read-only",
+        Ok(value) if value == "danger-full-access" => "danger-full-access",
         _ => "workspace-write",
     }
 }
@@ -426,11 +493,28 @@ fn build_runtime(
     enable_tools: bool,
 ) -> Result<ConversationRuntime<AnthropicRuntimeClient, CliToolExecutor>, Box<dyn std::error::Error>>
 {
+    build_runtime_with_permission_mode(
+        session,
+        model,
+        system_prompt,
+        enable_tools,
+        permission_mode_label(),
+    )
+}
+
+fn build_runtime_with_permission_mode(
+    session: Session,
+    model: String,
+    system_prompt: Vec<String>,
+    enable_tools: bool,
+    permission_mode: &str,
+) -> Result<ConversationRuntime<AnthropicRuntimeClient, CliToolExecutor>, Box<dyn std::error::Error>>
+{
     Ok(ConversationRuntime::new(
         session,
         AnthropicRuntimeClient::new(model, enable_tools)?,
         CliToolExecutor::new(),
-        permission_policy_from_env(),
+        permission_policy(permission_mode),
         system_prompt,
     ))
 }
@@ -644,15 +728,14 @@ impl ToolExecutor for CliToolExecutor {
     }
 }
 
-fn permission_policy_from_env() -> PermissionPolicy {
-    let mode =
-        env::var("RUSTY_CLAUDE_PERMISSION_MODE").unwrap_or_else(|_| "workspace-write".to_string());
-    match mode.as_str() {
-        "read-only" => PermissionPolicy::new(PermissionMode::Deny)
+fn permission_policy(mode: &str) -> PermissionPolicy {
+    if normalize_permission_mode(mode) == Some("read-only") {
+        PermissionPolicy::new(PermissionMode::Deny)
             .with_tool_mode("read_file", PermissionMode::Allow)
             .with_tool_mode("glob_search", PermissionMode::Allow)
-            .with_tool_mode("grep_search", PermissionMode::Allow),
-        _ => PermissionPolicy::new(PermissionMode::Allow),
+            .with_tool_mode("grep_search", PermissionMode::Allow)
+    } else {
+        PermissionPolicy::new(PermissionMode::Allow)
     }
 }
 
@@ -713,7 +796,10 @@ fn print_help() {
 
 #[cfg(test)]
 mod tests {
-    use super::{format_status_line, parse_args, render_repl_help, CliAction, DEFAULT_MODEL};
+    use super::{
+        format_status_line, normalize_permission_mode, parse_args, render_repl_help, CliAction,
+        DEFAULT_MODEL,
+    };
     use runtime::{ContentBlock, ConversationMessage, MessageRole};
     use std::path::PathBuf;
 
@@ -783,6 +869,9 @@ mod tests {
         assert!(help.contains("/help"));
         assert!(help.contains("/status"));
         assert!(help.contains("/model [model]"));
+        assert!(help.contains("/permissions [read-only|workspace-write|danger-full-access]"));
+        assert!(help.contains("/clear"));
+        assert!(help.contains("/cost"));
         assert!(help.contains("/exit"));
     }
 
@@ -812,6 +901,20 @@ mod tests {
         assert!(status.contains("messages=7"));
         assert!(status.contains("latest_tokens=10"));
         assert!(status.contains("cumulative_total_tokens=31"));
+    }
+
+    #[test]
+    fn normalizes_supported_permission_modes() {
+        assert_eq!(normalize_permission_mode("read-only"), Some("read-only"));
+        assert_eq!(
+            normalize_permission_mode("workspace-write"),
+            Some("workspace-write")
+        );
+        assert_eq!(
+            normalize_permission_mode("danger-full-access"),
+            Some("danger-full-access")
+        );
+        assert_eq!(normalize_permission_mode("unknown"), None);
     }
 
     #[test]
