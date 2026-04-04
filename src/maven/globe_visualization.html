@@ -1,0 +1,140 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Maven 지정학 이벤트 시각화</title>
+    <style>
+        body { margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; }
+        #globe { width: 100vw; height: 100vh; }
+        #info {
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            background: rgba(0, 0, 0, 0.8);
+            color: #fff;
+            padding: 15px;
+            border-radius: 8px;
+            max-width: 350px;
+            font-size: 13px;
+            z-index: 100;
+        }
+        #info h2 { margin: 0 0 10px 0; font-size: 16px; color: #4fc3f7; }
+        #info p { margin: 5px 0; }
+        #info .event { 
+            background: rgba(255, 255, 255, 0.1); 
+            padding: 8px; 
+            margin: 5px 0; 
+            border-radius: 4px;
+            border-left: 3px solid #ff6b6b;
+        }
+        #info .event.severity-5 { border-left-color: #ff0000; }
+        #info .event.severity-4 { border-left-color: #ff6b6b; }
+        #info .event.severity-3 { border-left-color: #ffa726; }
+        #info .event.severity-2 { border-left-color: #ffd54f; }
+        #info .event .title { font-weight: bold; margin-bottom: 4px; }
+        #info .event .meta { font-size: 11px; color: #aaa; }
+        #legend {
+            position: absolute;
+            bottom: 10px;
+            left: 10px;
+            background: rgba(0, 0, 0, 0.8);
+            color: #fff;
+            padding: 10px;
+            border-radius: 8px;
+            font-size: 12px;
+            z-index: 100;
+        }
+        #legend .item { display: flex; align-items: center; margin: 5px 0; }
+        #legend .dot { width: 10px; height: 10px; border-radius: 50%; margin-right: 8px; }
+    </style>
+</head>
+<body>
+    <div id="globe"></div>
+    <div id="info">
+        <h2>🌍 Maven 지정학 이벤트</h2>
+        <div id="events"></div>
+    </div>
+    <div id="legend">
+        <div class="item"><span class="dot" style="background:#ff0000"></span>심각 (5)</div>
+        <div class="item"><span class="dot" style="background:#ff6b6b"></span>높음 (4)</div>
+        <div class="item"><span class="dot" style="background:#ffa726"></span>중간 (3)</div>
+        <div class="item"><span class="dot" style="background:#ffd54f"></span>낮음 (2)</div>
+    </div>
+
+    <script src="https://unpkg.com/d3@7/dist/d3.min.js"></script>
+    <script src="https://unpkg.com/globe.gl@2/dist/globe.gl.min.js"></script>
+    <script>
+        // Maven 로그 데이터 (2026-03-26 최신 데이터)
+        const mavenEvents = [
+            { region: "hormuz", lat: 26.5, lng: 56.3, severity: 5, event: "호르무즈 해협 선박 0척 (기준 50척)", category: "energy", assets: ["WTI", "KOSPI", "원/달러"] },
+            { region: "taiwan", lat: 23.7, lng: 121.0, severity: 4, event: "대만, 중국의 도발 우려", category: "conflict", assets: ["삼성전자", "SK하이닉스"] },
+            { region: "ukraine", lat: 48.4, lng: 31.2, severity: 4, event: "우크라이나, 러시아 봄 공세", category: "conflict", assets: ["KOSPI", "원/달러"] },
+            { region: "malacca", lat: 2.5, lng: 101.7, severity: 3, event: "말라카 해협 선박 정체", category: "energy", assets: ["WTI", "KOSPI"] },
+            { region: "japan", lat: 35.7, lng: 139.7, severity: 2, event: "중국-일본 외교 갈등", category: "other", assets: ["KOSPI"] },
+            { region: "global", lat: 0, lng: 0, severity: 3, event: "트럼프 5 월 중국 방문 계획", category: "conflict", assets: ["KOSPI"] }
+        ];
+
+        // 지역별 좌표 매핑
+        const regionCoords = {
+            hormuz: { lat: 26.5, lng: 56.3 },
+            taiwan: { lat: 23.7, lng: 121.0 },
+            ukraine: { lat: 48.4, lng: 31.2 },
+            malacca: { lat: 2.5, lng: 101.7 },
+            japan: { lat: 35.7, lng: 139.7 },
+            global: { lat: 0, lng: 0 }
+        };
+
+        // 색상 매핑 (severity 기준)
+        const severityColors = {
+            5: "#ff0000",
+            4: "#ff6b6b",
+            3: "#ffa726",
+            2: "#ffd54f"
+        };
+
+        // 이벤트 표시
+        const eventsDiv = document.getElementById("events");
+        mavenEvents.forEach(e => {
+            const div = document.createElement("div");
+            div.className = `event severity-${e.severity}`;
+            div.innerHTML = `
+                <div class="title">${e.event}</div>
+                <div class="meta">카테고리: ${e.category} | 영향: ${e.assets.join(", ")}</div>
+            `;
+            eventsDiv.appendChild(div);
+        });
+
+        // Globe 시각화
+        const world = Globe()
+            (document.getElementById("globe"))
+            .globeImageUrl("https://unpkg.com/three-globe/example/img/earth-blue-marble.jpg")
+            .backgroundImageUrl("https://unpkg.com/three-globe/example/img/night-sky.png")
+            .pointsData(mavenEvents)
+            .pointLat("lat")
+            .pointLng("lng")
+            .pointColor(d => severityColors[d.severity])
+            .pointAltitude(0.05)
+            .pointRadius(0.5)
+            .pointsMerge(true)
+            .pointLabel(d => `
+                <div style="background:rgba(0,0,0,0.8);color:#fff;padding:8px;border-radius:4px;">
+                    <strong>${d.event}</strong><br>
+                    <span style="font-size:11px;color:#aaa;">Severity: ${d.severity} | ${d.category}</span>
+                </div>
+            `);
+
+        // 자동 회전
+        world.controls().autoRotate = true;
+        world.controls().autoRotateSpeed = 0.5;
+
+        // 초기 카메라 위치 (동북아 중심)
+        world.pointOfView({ lat: 35.0, lng: 127.0, altitude: 2.5 }, 1000);
+
+        // 마커 클릭 시 이벤트 상세 표시
+        world.onPointClick(point => {
+            world.pointOfView({ lat: point.lat, lng: point.lng, altitude: 1.5 }, 1000);
+        });
+    </script>
+</body>
+</html>
