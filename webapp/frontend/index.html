@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Kaven Dashboard (Scaffold)</title>
+  <style>
+    body { font-family: Arial, sans-serif; margin: 24px; }
+    button { margin-right: 8px; }
+    pre { background: #111; color: #0f0; padding: 12px; border-radius: 8px; overflow-x: auto; }
+  </style>
+</head>
+<body>
+  <h1>Kaven Dashboard (Scaffold)</h1>
+  <p>백엔드 API를 호출해 최신 실행 결과를 확인합니다.</p>
+
+  <button id="healthBtn">Health</button>
+  <button id="latestBtn">Latest Run</button>
+  <button id="runOnceBtn">Run Once</button>
+
+  <pre id="output">Ready</pre>
+
+  <script>
+    const api = 'http://127.0.0.1:8000';
+    const out = document.getElementById('output');
+
+    async function call(path, method = 'GET') {
+      out.textContent = `Calling ${method} ${path}...`;
+      try {
+        const res = await fetch(`${api}${path}`, { method });
+        const data = await res.json();
+        out.textContent = JSON.stringify(data, null, 2);
+      } catch (e) {
+        out.textContent = String(e);
+      }
+    }
+
+    document.getElementById('healthBtn').onclick = () => call('/health');
+    document.getElementById('latestBtn').onclick = () => call('/runs/latest');
+    document.getElementById('runOnceBtn').onclick = () => call('/runs/once', 'POST');
+  </script>
+</body>
+</html>
