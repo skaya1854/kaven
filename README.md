@@ -85,6 +85,10 @@ python src/kaven/kaven.py --watch --interval 10
 - `SEARXNG_URL`
   - 기본값은 `http://localhost:8080`.
   - SearxNG가 미구동이면 뉴스/소셜 검색이 크게 제한됩니다.
+  - `social_collector.py`는 현재 `SEARXNG_URL`이 아닌 내부 상수(`http://localhost:8080`)를 사용하므로, 주소를 바꿨다면 해당 파일도 함께 수정해야 합니다.
+- OpenSky 인증 방식
+  - **현재 코드 기준** OpenSky는 OAuth2가 아니라 `OPENSKY_USERNAME`/`OPENSKY_PASSWORD` BasicAuth 흐름을 사용합니다.
+  - OAuth2로 운용 중이라면 collector 코드와 README를 함께 업데이트해 혼선을 방지하세요.
 
 ### 3.2 분석 엔진
 
@@ -97,12 +101,20 @@ python src/kaven/kaven.py --watch --interval 10
 - `TELEGRAM_BOT_TOKEN`이 없으면 `OPENCLAW_GATEWAY_URL` 폴백 발송을 시도.
 - 긴급 DM 사용 시 `TELEGRAM_USER_DM` 필요.
 - 토픽 사용 시 `TELEGRAM_TOPIC_MAVEN` 값을 채널/포럼 토픽에 맞게 설정.
+- Bot Token이 없고 `OPENCLAW_GATEWAY_URL`도 불가하면 알림 발송은 실패합니다.
 
-### 3.4 자주 발생하는 설정 실수
+### 3.4 저장소(Convex) 동작
+
+- Kaven은 실행 종료 시 이벤트가 있으면 Convex endpoint(`https://exciting-cod-257.convex.site/addMavenRun`)로 업로드를 시도합니다.
+- 업로드 실패해도 로컬 로그(`src/kaven/logs/maven_YYYYMMDD.jsonl`)는 유지됩니다.
+- 즉, 웹 대시보드 연동이 필요하면 Convex 접근 가능 여부를 별도로 점검해야 합니다.
+
+### 3.5 자주 발생하는 설정 실수
 
 - 변수명 실수: `CHAT_ID`가 아니라 **`TELEGRAM_CHAT_ID`**를 사용해야 합니다.
 - `.env` 경로 실수: 루트가 아니라 **`src/kaven/.env`**에 있어야 자동 로드됩니다.
 - 로컬 SearxNG 미구동: `localhost:8080` 연결 실패 시 뉴스/소셜 수집 로그에 경고가 발생합니다.
+- 로그 경로 혼동: 현재 저장 기본 경로는 `src/kaven/logs/`입니다.
 
 ---
 
@@ -115,18 +127,43 @@ python src/kaven/kaven.py --watch --interval 10
 - `SearxNG ... 실패` / `HTTP 403` / 연결 오류
 - `모든 분석 경로 실패` (AI 키 누락/실패)
 - `No telegram delivery method available` (텔레그램 + 게이트웨이 모두 실패)
+- `Convex 저장 실패 (로컬 로그는 유지)` (클라우드 업로드 실패)
 
 ---
 
-## 5. 웹 앱 포팅 스캐폴드
+## 5. 인프라/검색엔진 실행 (실사용 권장)
 
-### 5.1 백엔드 실행
+### 5.1 로컬 SearxNG (Docker)
+
+`news_collector.py`와 `social_collector.py`가 `http://localhost:8080`를 기대합니다.
+
+```bash
+# 예시: 로컬에 searxng 컨테이너를 8080으로 노출
+docker run --rm -d --name searxng -p 8080:8080 searxng/searxng
+curl -s "http://localhost:8080/search?q=Hormuz&format=json" | head
+```
+
+> macOS에서 Docker Desktop 대신 Colima를 쓴다면 먼저 `colima start` 후 위 명령을 실행하세요.
+
+### 5.2 docker-compose 기반 실행
+
+```bash
+cd deploy/docker
+docker compose up -d
+docker compose ps
+```
+
+---
+
+## 6. 웹 앱 포팅 스캐폴드
+
+### 6.1 백엔드 실행
 
 ```bash
 uvicorn webapp.backend.app:app --reload --port 8000
 ```
 
-### 5.2 프론트 실행
+### 6.2 프론트 실행
 
 ```bash
 python -m http.server 8080 --directory webapp/frontend
@@ -136,7 +173,7 @@ python -m http.server 8080 --directory webapp/frontend
 
 ---
 
-## 6. 테스트
+## 7. 테스트
 
 ```bash
 # 전체 테스트
@@ -148,7 +185,7 @@ make test-kaven
 
 ---
 
-## 7. 운영 참고
+## 8. 운영 참고
 
 - `.env` 파일 경로: `src/kaven/.env`
 - 실행 로그: `src/kaven/logs/maven_YYYYMMDD.jsonl`
