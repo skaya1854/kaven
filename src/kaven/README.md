@@ -1,5 +1,7 @@
 # Kaven Runtime (src/kaven)
 
+**KAVEN = Korean AI-based Vigilance for Event Navigation**
+
 이 문서는 `src/kaven` 런타임 모듈 전용 설명입니다.
 
 ## 엔트리포인트

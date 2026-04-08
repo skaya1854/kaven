@@ -1,5 +1,7 @@
 # Kaven
 
+**KAVEN = Korean AI-based Vigilance for Event Navigation**
+
 Kaven은 지정학 이벤트를 수집(AIS/ADS-B/뉴스/소셜)하고, 분석/중복 제거 후 텔레그램 알림으로 전달하는 조기경보 시스템입니다.
 
 ## 1. 프로젝트 구성
