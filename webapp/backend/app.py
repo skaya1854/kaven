@@ -7,11 +7,19 @@ from pathlib import Path
 from typing import Any, AsyncIterator
 
 from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 
 from src.kaven.kaven import LOG_DIR, run_once
 
 app = FastAPI(title="Kaven Web API", version="0.1.0")
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 
 @app.get("/health")
@@ -75,9 +83,11 @@ def list_runs(
                 continue
             keep_events.append(event)
 
-        if keep_events:
+        # 필터가 없으면 이벤트가 0건인 run도 목록에 보여준다.
+        no_filter = severity_min is None and not category and not q
+        if keep_events or no_filter:
             copied = dict(run)
-            copied["events"] = keep_events
+            copied["events"] = keep_events if keep_events else events
             filtered.append(copied)
 
         if len(filtered) >= limit:
