@@ -41,6 +41,9 @@ AISSTREAM_API_KEY=
 SEARXNG_URL=http://localhost:8080
 
 # ===== 분석 엔진 (둘 중 하나 이상 권장) =====
+OPENAI_BASE_URL=
+OPENAI_API_KEY=
+OPENAI_MODEL=
 GEMINI_API_KEY=
 ANTHROPIC_API_KEY=
 
@@ -92,8 +95,13 @@ python src/kaven/kaven.py --watch --interval 10
 
 ### 3.2 분석 엔진
 
+- 로컬 LLM(OpenAI 호환 API) 사용 시:
+  - `OPENAI_BASE_URL` 예: `http://localhost:11434`(ollama+proxy), `http://localhost:8001`
+  - `OPENAI_MODEL` 예: `qwen2.5:14b`, `llama-3.1-8b-instruct`
+  - `OPENAI_API_KEY`는 서버가 요구할 때만 설정 (로컬 서버는 빈 값 허용 가능)
 - `GEMINI_API_KEY` 또는 `ANTHROPIC_API_KEY` 중 최소 1개 권장.
-- 둘 다 없거나 호출 실패 시 규칙 기반 `_fallback_analysis`로 동작합니다.
+- 분석 시도 순서: **OpenAI 호환 API → Gemini → Anthropic → 규칙 기반 폴백**.
+- 모든 경로가 실패하면 규칙 기반 `_fallback_analysis`로 동작합니다.
 
 ### 3.3 알림(텔레그램/OpenClaw)
 

@@ -69,7 +69,7 @@ JSON 배열만 출력하세요. 추가 설명 없이 순수 JSON만."""
 
 
 async def analyze(collected_data: dict[str, Any]) -> list[dict[str, Any]]:
-    """수집된 데이터를 Claude API로 분석."""
+    """수집된 데이터를 LLM API로 분석."""
     
     # 데이터 요약 (토큰 절약)
     summary = _summarize_data(collected_data)
@@ -78,12 +78,26 @@ async def analyze(collected_data: dict[str, Any]) -> list[dict[str, Any]]:
         logger.info("분석할 데이터 없음")
         return []
     
-    # Gemini API 우선, Anthropic 폴백
+    # OpenAI 호환 API(로컬 LLM 포함) 우선, Gemini/Anthropic 순으로 폴백
+    openai_base_url = os.getenv("OPENAI_BASE_URL", "").strip().rstrip("/")
+    openai_api_key = os.getenv("OPENAI_API_KEY", "").strip()
+    openai_model = os.getenv("OPENAI_MODEL", "gpt-4o-mini").strip() or "gpt-4o-mini"
     gemini_key = os.getenv("GEMINI_API_KEY", "").strip()
     anthropic_key = os.getenv("ANTHROPIC_API_KEY", "").strip()
     
     result = None
-    if gemini_key:
+    if openai_base_url:
+        try:
+            result = await _call_openai_compatible(
+                base_url=openai_base_url,
+                api_key=openai_api_key,
+                model=openai_model,
+                summary=summary,
+            )
+        except Exception as e:
+            logger.warning(f"OpenAI 호환 API 분석 실패: {e}")
+
+    if result is None and gemini_key:
         try:
             result = await _call_gemini(gemini_key, summary)
         except Exception as e:
@@ -188,6 +202,58 @@ def _summarize_data(collected_data: dict[str, Any]) -> str:
             )
     
     return "\n".join(parts)
+
+
+async def _call_openai_compatible(
+    base_url: str,
+    api_key: str,
+    model: str,
+    summary: str,
+) -> list[dict] | None:
+    """OpenAI 호환 Chat Completions API 호출 (로컬 LLM 서버 포함)."""
+    url = f"{base_url}/v1/chat/completions"
+    payload = {
+        "model": model,
+        "temperature": 0.2,
+        "messages": [
+            {"role": "system", "content": ANALYSIS_SYSTEM_PROMPT},
+            {
+                "role": "user",
+                "content": ANALYSIS_USER_PROMPT.format(collected_data=summary),
+            },
+        ],
+    }
+    headers = {"Content-Type": "application/json"}
+    if api_key:
+        headers["Authorization"] = f"Bearer {api_key}"
+
+    async with aiohttp.ClientSession() as session:
+        async with session.post(
+            url,
+            json=payload,
+            headers=headers,
+            timeout=aiohttp.ClientTimeout(total=60),
+        ) as resp:
+            if resp.status != 200:
+                body = await resp.text()
+                logger.warning(f"OpenAI 호환 API {resp.status}: {body[:200]}")
+                return None
+            data = await resp.json()
+
+    choices = data.get("choices", [])
+    if not choices:
+        return None
+
+    message = choices[0].get("message", {})
+    content = message.get("content", "")
+    if isinstance(content, list):
+        text = "".join(
+            c.get("text", "") for c in content if isinstance(c, dict)
+        )
+    else:
+        text = str(content)
+
+    return _parse_analysis_response(text)
 
 
 async def _call_gemini(api_key: str, summary: str) -> list[dict] | None:

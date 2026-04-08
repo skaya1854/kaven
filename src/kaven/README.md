@@ -26,4 +26,5 @@ python src/kaven/kaven.py --watch --interval 5
 ## 주의
 
 - `.env`는 `src/kaven/.env`에서 로드됩니다.
+- 로컬 LLM 사용 시 `OPENAI_BASE_URL`, `OPENAI_MODEL`, `OPENAI_API_KEY`(선택)를 설정하면 OpenAI 호환 API로 분석할 수 있습니다.
 - 테스트 및 웹앱 실행 방법은 루트 `README.md`를 참고하세요.
