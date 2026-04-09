@@ -3,8 +3,7 @@ Signal Generator — 지정학 이벤트 severity 기반 알림 발송
 
 severity 1-2: 로그만 저장
 severity 3+: 텔레그램 topic:5052 (Kaven 전용 채널) 알림 — 한국어
-severity 5:  알리스님 개인 DM 즉시 알림
-※ topic:2, topic:37 발송 완전 제거 (2026-03-07 알리스 지시)
+severity 5:  사용자님 개인 DM 즉시 알림
 
 OpenClaw message API 우선 사용, 실패 시 Bot API 직접 호출.
 """
@@ -23,9 +22,7 @@ logger = logging.getLogger("kaven.signal")
 
 # 텔레그램 설정
 CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "-1003868141703")
-TOPIC_MAVEN = int(os.getenv("TELEGRAM_TOPIC_MAVEN", "5052"))   # Kaven 전용 토픽 (알리스 지시 2026-03-07)
-TOPIC_GEOPOLITICS = int(os.getenv("TELEGRAM_TOPIC_GEOPOLITICS", "37"))   # 레거시 (사용 안 함)
-TOPIC_INVESTMENT = int(os.getenv("TELEGRAM_TOPIC_INVESTMENT", "2"))       # 레거시 (사용 안 함)
+TOPIC_MAVEN = int(os.getenv("TELEGRAM_TOPIC_MAVEN", "5052"))   # Kaven 전용 토픽 
 USER_DM = os.getenv("TELEGRAM_USER_DM", "40130797")
 BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
 GATEWAY_URL = os.getenv("OPENCLAW_GATEWAY_URL", "http://localhost:18789")

@@ -2,7 +2,7 @@
 """
 Kaven Smart System — 지정학 조기경보 + 투자 신호 시스템
 
-팔란티어 Kaven Smart System 스타일의 다중 데이터 소스
+팔란티어 Maven Smart System 스타일의 다중 데이터 소스
 실시간 수집·분석·알림 개인용 시스템.
 
 사용법:
