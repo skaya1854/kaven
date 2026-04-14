@@ -4,6 +4,44 @@
 
 ---
 
+## v0.0.04 — 2026-04-13
+
+### 주요 변경사항 (설정 파일화 + Codex 리뷰 반영)
+1. **감시 구역/피드/키워드 외부 설정화**
+   - `src/kaven/config_loader.py` 신규: JSON 설정 로더, 내장 기본값 fallback
+   - `src/kaven/config.example.json` 샘플 제공
+   - 지원 섹션: `ais_zones`, `adsb_zones`, `news_feeds`, `news_keywords`, `social_keywords`
+   - 각 항목에 `enabled` 플래그 → 선택적 활성화/비활성화
+   - `KAVEN_CONFIG` 환경변수로 경로 override 가능
+2. **4개 collector 리팩터링**
+   - `ais_collector.py`: `WATCH_ZONES` → `_watch_zones()` (런타임 로드)
+   - `adsb_collector.py`: `WATCH_AIRSPACES` → `_watch_airspaces()`
+   - `news_collector.py`: `RSS_FEEDS`, `GEOPOLITICAL_KEYWORDS` → `_rss_feeds()`, `_geopolitical_keywords()`
+   - `social_collector.py`: `SEARCH_KEYWORDS` → `_search_keywords()` + `SEARXNG_URL` env 정책 적용
+3. **API 추가**
+   - `GET /config` — 현재 로드된 설정 전체(enabled/disabled 수 포함) 조회
+4. **Codex 리뷰 수정사항 반영 (PR #13에서 누락되었던 커밋 복원)**
+   - ruff 11 errors → 0 (미사용 import 제거, 변수명 `l`→`line`, noqa 수정, `import re` 이동, W293 whitespace 정리)
+   - `pyproject.toml` (ruff/mypy 설정)
+   - `requirements.txt` / `requirements-dev.txt`
+   - `social_collector` SearxNG URL 환경변수화 (P2)
+5. **테스트**
+   - `tests/test_config_loader.py` 신규 8건 (파일 없을 때 기본값, 커스텀 로드, enabled 필터, 전부 비활성, 오류 JSON 복원)
+   - 전체: 28 passed
+
+### 운영 영향
+- Breaking change 없음: 기본 동작은 기존과 완전 동일
+- 설정 커스터마이즈 원하면 `cp src/kaven/config.example.json src/kaven/config.json` 후 편집
+
+### 검증 결과
+- `ruff check .` → All checks passed
+- `python3 -m pytest -q` → **28 passed**
+
+### 관련 링크
+- Issue: N/A (사용자 요청 + Codex handoff 이슈 대응)
+
+---
+
 ## v0.0.03 — 2026-04-13
 
 ### 주요 변경사항 (대시보드 기능 확장)

@@ -9,36 +9,36 @@ Social Collector — X(Twitter) 지정학 키워드 수집
 import asyncio
 import json
 import logging
+import os
 import re
-import subprocess
 import urllib.parse
 import urllib.request
 from datetime import datetime, timezone
 from typing import Any
 
+from src.kaven.config_loader import get_social_keywords
+
 logger = logging.getLogger("kaven.social")
 
-# 검색 키워드
-SEARCH_KEYWORDS = [
-    "Iran Hormuz",
-    "Taiwan Strait military",
-    "DPRK missile",
-    "semiconductor embargo",
-    "oil supply disruption",
-    "Ukraine offensive",
-    "Korea THAAD",
-    "Gaza ceasefire",
-]
 
-PINCHTAB_BASE = "http://localhost:9867"
-SEARXNG_BASE = "http://localhost:8080"
+def _search_keywords() -> list[str]:
+    """활성화된 소셜 검색 키워드 목록 반환."""
+    return [kw["query"] for kw in get_social_keywords(only_enabled=True)]
+
+
+PINCHTAB_BASE = os.environ.get("PINCHTAB_URL", "http://localhost:9867").rstrip("/")
+SEARXNG_BASE = os.environ.get("SEARXNG_URL", "http://localhost:8080").rstrip("/")
 
 
 async def collect() -> list[dict[str, Any]]:
     """X 지정학 키워드 수집."""
     results = []
+    keywords = _search_keywords()
+    if not keywords:
+        logger.info("활성화된 소셜 검색 키워드 없음 — 수집 스킵")
+        return []
 
-    for keyword in SEARCH_KEYWORDS:
+    for keyword in keywords:
         try:
             # 1차: SearxNG (time_range 없이 — 더 많은 결과)
             items = await _search_via_searxng(keyword)
@@ -63,7 +63,7 @@ async def _search_via_searxng(query: str) -> list[dict[str, Any]]:
 
     results = []
     try:
-        req = urllib.request.Request(url, headers={"User-Agent": "Kaven/0.0.03"})
+        req = urllib.request.Request(url, headers={"User-Agent": "Kaven/0.0.04"})
         with urllib.request.urlopen(req, timeout=10) as resp:
             data = json.loads(resp.read().decode())
 
@@ -110,7 +110,7 @@ async def _search_via_pinchtab(query: str) -> list[dict[str, Any]]:
         # PinchTab 탭 목록 조회
         req = urllib.request.Request(
             f"{PINCHTAB_BASE}/tabs",
-            headers={"User-Agent": "Kaven/0.0.03"}
+            headers={"User-Agent": "Kaven/0.0.04"}
         )
         with urllib.request.urlopen(req, timeout=5) as resp:
             tabs_data = json.loads(resp.read().decode())
@@ -127,7 +127,7 @@ async def _search_via_pinchtab(query: str) -> list[dict[str, Any]]:
         nav_req = urllib.request.Request(
             f"{PINCHTAB_BASE}/nav",
             data=json.dumps({"tabId": tab_id, "url": search_url}).encode(),
-            headers={"Content-Type": "application/json", "User-Agent": "Kaven/0.0.03"},
+            headers={"Content-Type": "application/json", "User-Agent": "Kaven/0.0.04"},
             method="POST"
         )
         with urllib.request.urlopen(nav_req, timeout=10) as resp:
@@ -139,15 +139,15 @@ async def _search_via_pinchtab(query: str) -> list[dict[str, Any]]:
         # 텍스트 추출
         text_req = urllib.request.Request(
             f"{PINCHTAB_BASE}/text?tabId={tab_id}",
-            headers={"User-Agent": "Kaven/0.0.03"}
+            headers={"User-Agent": "Kaven/0.0.04"}
         )
         with urllib.request.urlopen(text_req, timeout=10) as resp:
             page_text = resp.read().decode(errors="replace")
 
         # 트윗 텍스트 파싱 (X 페이지 구조 기준)
         # 줄 단위로 분리, 비어있지 않고 충분히 긴 줄만 추출
-        lines = [l.strip() for l in page_text.split("\n") if len(l.strip()) > 30]
-        tweet_candidates = [l for l in lines if not l.startswith("http") and len(l) < 300][:5]
+        lines = [line.strip() for line in page_text.split("\n") if len(line.strip()) > 30]
+        tweet_candidates = [line for line in lines if not line.startswith("http") and len(line) < 300][:5]
 
         for text in tweet_candidates:
             results.append({

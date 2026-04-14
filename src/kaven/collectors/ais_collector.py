@@ -15,27 +15,22 @@ import os
 from datetime import datetime, timezone
 from typing import Any
 
+from src.kaven.config_loader import get_ais_zones
+
 logger = logging.getLogger("kaven.ais")
 
-# 모니터링 지역 정의
-WATCH_ZONES = {
-    "hormuz": {
-        "name": "호르무즈 해협",
-        "lat_min": 25.5, "lat_max": 27.0,
-        "lon_min": 56.0, "lon_max": 57.5,
-    },
-    "malacca": {
-        "name": "말라카 해협",
-        "lat_min": 1.0, "lat_max": 6.0,
-        "lon_min": 99.0, "lon_max": 104.0,
-    },
-}
 
-# 각 지역별 정상 트래픽 기준선 (조정 필요)
-BASELINE_SHIP_COUNT = {
-    "hormuz": 50,
-    "malacca": 80,
-}
+def _watch_zones() -> dict[str, dict[str, Any]]:
+    """설정 로더로부터 활성화된 AIS 감시 구역을 dict로 변환 (런타임 로드)."""
+    zones: dict[str, dict[str, Any]] = {}
+    for z in get_ais_zones(only_enabled=True):
+        zones[z["id"]] = {
+            "name": z["name"],
+            "lat_min": z["lat_min"], "lat_max": z["lat_max"],
+            "lon_min": z["lon_min"], "lon_max": z["lon_max"],
+            "baseline_ships": z.get("baseline_ships", 50),
+        }
+    return zones
 
 # 이상 감지 임계값 (기준선 대비 비율)
 ANOMALY_THRESHOLD_LOW = 0.5   # 50% 이하로 감소하면 이상
@@ -45,15 +40,15 @@ ANOMALY_THRESHOLD_HIGH = 2.0  # 200% 이상 증가하면 이상
 async def collect(timeout_seconds: int = 30) -> list[dict[str, Any]]:
     """
     AIS 데이터를 수집하고 이상 감지 결과를 반환.
-    
+
     API 키가 없으면 시뮬레이션 데이터 반환.
     """
     api_key = os.getenv("AISSTREAM_API_KEY", "").strip()
-    
+
     if not api_key:
         logger.warning("AISSTREAM_API_KEY 미설정 — 시뮬레이션 모드로 동작")
         return _simulate_data()
-    
+
     try:
         return await _collect_live(api_key, timeout_seconds)
     except Exception as e:
@@ -68,33 +63,38 @@ async def collect(timeout_seconds: int = 30) -> list[dict[str, Any]]:
 
 async def _collect_live(api_key: str, timeout_seconds: int) -> list[dict[str, Any]]:
     """aisstream.io WebSocket 연결로 실시간 데이터 수집."""
-    import websockets  # noqa: delayed import
-    
-    zone_ships: dict[str, list] = {zone: [] for zone in WATCH_ZONES}
-    
+    import websockets  # noqa: E402
+
+    watch_zones = _watch_zones()
+    if not watch_zones:
+        logger.warning("AIS 감시 구역이 모두 비활성화됨 — 빈 결과 반환")
+        return []
+
+    zone_ships: dict[str, list] = {zone: [] for zone in watch_zones}
+
     # aisstream.io WebSocket 구독 메시지
     bounding_boxes = []
-    for zone in WATCH_ZONES.values():
+    for zone in watch_zones.values():
         bounding_boxes.append([
             [zone["lat_min"], zone["lon_min"]],
             [zone["lat_max"], zone["lon_max"]],
         ])
-    
+
     subscribe_msg = {
         "APIKey": api_key,
         "BoundingBoxes": bounding_boxes,
         "FiltersShipMMSI": [],
         "FilterMessageTypes": ["PositionReport"],
     }
-    
+
     uri = "wss://stream.aisstream.io/v0/stream"
-    
+
     # WebSocket 연결 전 OpenSky REST로 빠르게 선박 수 확인 (fallback 겸용)
     try:
         import aiohttp
         opensky_results = []
         async with aiohttp.ClientSession() as session:
-            for zone_key, zone_def in WATCH_ZONES.items():
+            for zone_key, zone_def in watch_zones.items():
                 url = (f"https://opensky-network.org/api/states/all"
                        f"?lamin={zone_def['lat_min']}&lomin={zone_def['lon_min']}"
                        f"&lamax={zone_def['lat_max']}&lomax={zone_def['lon_max']}")
@@ -103,9 +103,9 @@ async def _collect_live(api_key: str, timeout_seconds: int) -> list[dict[str, An
                         data = await r.json()
                         states = data.get("states", []) or []
                         opensky_results.append((zone_key, len(states), states))
-                        logger.info(f"OpenSky [{WATCH_ZONES[zone_key]['name']}]: {len(states)}기 감지")
+                        logger.info(f"OpenSky [{watch_zones[zone_key]['name']}]: {len(states)}기 감지")
         if opensky_results:
-            zone_ships_opensky = {zone_key: [] for zone_key in WATCH_ZONES}
+            zone_ships_opensky = {zone_key: [] for zone_key in watch_zones}
             for zone_key, count, states in opensky_results:
                 for s in states:
                     zone_ships_opensky[zone_key].append({
@@ -124,21 +124,21 @@ async def _collect_live(api_key: str, timeout_seconds: int) -> list[dict[str, An
         async with websockets.connect(uri, open_timeout=8) as ws:
             await ws.send(json.dumps(subscribe_msg))
             logger.info("AIS WebSocket 연결 성공")
-            
+
             # timeout_seconds 동안 데이터 수집
             end_time = asyncio.get_event_loop().time() + timeout_seconds
-            
+
             while asyncio.get_event_loop().time() < end_time:
                 try:
                     raw = await asyncio.wait_for(ws.recv(), timeout=5)
                     msg = json.loads(raw)
-                    
+
                     if msg.get("MessageType") == "PositionReport":
                         pos = msg.get("Message", {}).get("PositionReport", {})
                         lat = pos.get("Latitude", 0)
                         lon = pos.get("Longitude", 0)
-                        
-                        for zone_key, zone_def in WATCH_ZONES.items():
+
+                        for zone_key, zone_def in watch_zones.items():
                             if (zone_def["lat_min"] <= lat <= zone_def["lat_max"] and
                                 zone_def["lon_min"] <= lon <= zone_def["lon_max"]):
                                 zone_ships[zone_key].append({
@@ -155,35 +155,35 @@ async def _collect_live(api_key: str, timeout_seconds: int) -> list[dict[str, An
     except Exception as e:
         logger.error(f"WebSocket 연결 실패: {e}")
         raise
-    
-    return _analyze_zones(zone_ships)
+
+    return _analyze_zones(zone_ships, watch_zones)
 
 
-def _analyze_zones(zone_ships: dict[str, list]) -> list[dict[str, Any]]:
+def _analyze_zones(zone_ships: dict[str, list], watch_zones: dict[str, dict[str, Any]]) -> list[dict[str, Any]]:
     """각 감시 구역의 선박 데이터를 분석하여 이상 감지."""
     results = []
     now = datetime.now(timezone.utc).isoformat()
-    
+
     for zone_key, ships in zone_ships.items():
-        zone_name = WATCH_ZONES[zone_key]["name"]
+        zone_name = watch_zones[zone_key]["name"]
         ship_count = len(ships)
-        baseline = BASELINE_SHIP_COUNT.get(zone_key, 50)
+        baseline = watch_zones[zone_key].get("baseline_ships", 50)
         ratio = ship_count / baseline if baseline > 0 else 0
-        
+
         anomaly = None
         if ratio <= ANOMALY_THRESHOLD_LOW:
             anomaly = "ship_count_drop"
         elif ratio >= ANOMALY_THRESHOLD_HIGH:
             anomaly = "ship_count_surge"
-        
+
         # 속도 0 선박 클러스터링 (정박·대기 이상)
         stationary = [s for s in ships if s.get("speed", 0) < 0.5]
         if len(stationary) > ship_count * 0.6 and ship_count > 5:
             anomaly = anomaly or "excessive_stationary"
-        
+
         # 유니크 선박 MMSI 추출
         unique_mmsis = set(s.get("mmsi") for s in ships if s.get("mmsi"))
-        
+
         result = {
             "source": "ais",
             "zone": zone_key,
@@ -196,7 +196,7 @@ def _analyze_zones(zone_ships: dict[str, list]) -> list[dict[str, Any]]:
             "anomaly": anomaly,
             "timestamp": now,
         }
-        
+
         if anomaly:
             result["severity_hint"] = 3 if anomaly == "ship_count_drop" else 2
             result["detail"] = (
@@ -204,40 +204,32 @@ def _analyze_zones(zone_ships: dict[str, list]) -> list[dict[str, Any]]:
                 f"비율 {ratio:.1%}, 정박 {len(stationary)}척"
             )
             logger.warning(f"AIS 이상 감지: {result['detail']}")
-        
+
         results.append(result)
-    
+
     return results
 
 
 def _simulate_data() -> list[dict[str, Any]]:
-    """API 키 미설정 시 시뮬레이션 데이터."""
+    """API 키 미설정 시 시뮬레이션 데이터. 활성화된 zone에 대해서만 생성."""
     now = datetime.now(timezone.utc).isoformat()
-    return [
-        {
+    watch_zones = _watch_zones()
+    results = []
+    for zone_key, zone in watch_zones.items():
+        baseline = zone.get("baseline_ships", 50)
+        # 기준선의 85~95% 정도의 "정상" 값을 시뮬레이션
+        sim_count = int(baseline * 0.9)
+        results.append({
             "source": "ais",
-            "zone": "hormuz",
-            "zone_name": "호르무즈 해협",
-            "ship_count": 45,
-            "unique_ships": 42,
-            "baseline": 50,
-            "ratio": 0.9,
-            "stationary_count": 5,
+            "zone": zone_key,
+            "zone_name": zone["name"],
+            "ship_count": sim_count,
+            "unique_ships": int(sim_count * 0.93),
+            "baseline": baseline,
+            "ratio": round(sim_count / baseline if baseline else 0, 3),
+            "stationary_count": int(sim_count * 0.1),
             "anomaly": None,
             "timestamp": now,
             "simulated": True,
-        },
-        {
-            "source": "ais",
-            "zone": "malacca",
-            "zone_name": "말라카 해협",
-            "ship_count": 78,
-            "unique_ships": 70,
-            "baseline": 80,
-            "ratio": 0.975,
-            "stationary_count": 8,
-            "anomaly": None,
-            "timestamp": now,
-            "simulated": True,
-        },
-    ]
+        })
+    return results
