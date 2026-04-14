@@ -10,6 +10,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 
+from src.kaven.config_loader import load_config
 from src.kaven.kaven import LOG_DIR, run_once
 from src.kaven.report_generator import generate_daily_report
 from src.kaven.version import __version__
@@ -415,3 +416,25 @@ def portfolio_asset_detail(asset_name: str, days: int = 14) -> dict[str, Any]:
     if not match:
         raise HTTPException(status_code=404, detail=f"Asset not found: {asset_name}")
     return match
+
+
+# ── Configuration Visibility ────────────────────────────────────
+
+
+@app.get("/config")
+def current_config() -> dict[str, Any]:
+    """
+    현재 로드된 감시 구역/피드/키워드 설정을 반환.
+    enabled=false 항목 포함 (전체 상태 확인용).
+    """
+    cfg = load_config()
+    summary = {}
+    for key, items in cfg.items():
+        enabled_count = sum(1 for x in items if x.get("enabled", True))
+        summary[key] = {
+            "total": len(items),
+            "enabled": enabled_count,
+            "disabled": len(items) - enabled_count,
+            "items": items,
+        }
+    return summary

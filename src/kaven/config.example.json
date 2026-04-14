@@ -1,0 +1,62 @@
+{
+  "_comment": "Kaven 감시구역/피드/키워드 설정. 이 파일을 config.json으로 복사하고 편집하세요. 각 항목에 enabled=false로 두면 비활성화됩니다.",
+
+  "ais_zones": [
+    {"id": "hormuz",  "name": "호르무즈 해협", "enabled": true,
+     "lat_min": 25.5, "lat_max": 27.0, "lon_min": 56.0, "lon_max": 57.5, "baseline_ships": 50},
+    {"id": "malacca", "name": "말라카 해협", "enabled": true,
+     "lat_min": 1.0,  "lat_max": 6.0,  "lon_min": 99.0, "lon_max": 104.0, "baseline_ships": 80},
+    {"id": "bab_el_mandeb", "name": "바브엘만데브", "enabled": false,
+     "lat_min": 12.0, "lat_max": 14.0, "lon_min": 42.5, "lon_max": 44.0, "baseline_ships": 30}
+  ],
+
+  "adsb_zones": [
+    {"id": "middle_east",      "name": "중동 (이란·이라크·걸프)", "enabled": true,
+     "lat_min": 24.0, "lat_max": 38.0, "lon_min": 44.0, "lon_max": 62.0},
+    {"id": "taiwan_strait",    "name": "대만 해협", "enabled": true,
+     "lat_min": 22.0, "lat_max": 27.0, "lon_min": 117.0, "lon_max": 122.0},
+    {"id": "korean_peninsula", "name": "한반도", "enabled": true,
+     "lat_min": 33.0, "lat_max": 43.0, "lon_min": 124.0, "lon_max": 132.0},
+    {"id": "eastern_europe",   "name": "동유럽 (우크라이나)", "enabled": false,
+     "lat_min": 44.0, "lat_max": 52.0, "lon_min": 22.0, "lon_max": 40.0}
+  ],
+
+  "news_feeds": [
+    {"id": "reuters_world",   "name": "Reuters World",   "enabled": true,  "url": "https://feeds.reuters.com/Reuters/worldNews"},
+    {"id": "ap_topnews",      "name": "AP Top News",     "enabled": true,  "url": "https://rsshub.app/apnews/topics/apf-topnews"},
+    {"id": "bbc_world",       "name": "BBC World",       "enabled": true,  "url": "http://feeds.bbci.co.uk/news/world/rss.xml"},
+    {"id": "bbc_asia",        "name": "BBC Asia",        "enabled": true,  "url": "http://feeds.bbci.co.uk/news/world/asia/rss.xml"},
+    {"id": "bbc_middle_east", "name": "BBC Middle East", "enabled": true,  "url": "http://feeds.bbci.co.uk/news/world/middle_east/rss.xml"},
+    {"id": "yonhap",          "name": "연합뉴스",        "enabled": false, "url": "https://www.yna.co.kr/rss/news.xml"}
+  ],
+
+  "news_keywords": [
+    {"id": "iran_military",    "query": "Iran military",     "enabled": true},
+    {"id": "hormuz_strait",    "query": "Hormuz strait",     "enabled": true},
+    {"id": "taiwan_strait_mil", "query": "Taiwan strait military", "enabled": true},
+    {"id": "dprk_missile",     "query": "DPRK missile",      "enabled": true},
+    {"id": "north_korea_nuclear", "query": "North Korea nuclear", "enabled": true},
+    {"id": "semiconductor_embargo", "query": "semiconductor embargo", "enabled": true},
+    {"id": "thaad_deployment", "query": "THAAD deployment",  "enabled": true},
+    {"id": "ukraine_offensive", "query": "Ukraine Russia offensive", "enabled": true},
+    {"id": "oil_supply",       "query": "oil supply disruption", "enabled": true},
+    {"id": "south_china_sea",  "query": "South China Sea",   "enabled": true},
+    {"id": "israel_iran",      "query": "Israel Iran",       "enabled": true},
+    {"id": "sanctions_china",  "query": "sanctions China",   "enabled": true},
+    {"id": "nato_deployment",  "query": "NATO deployment",   "enabled": true},
+    {"id": "middle_east_war_ko", "query": "중동 전쟁",        "enabled": true},
+    {"id": "taiwan_strait_ko", "query": "대만 해협",          "enabled": true},
+    {"id": "semi_sanctions_ko", "query": "반도체 제재",       "enabled": true}
+  ],
+
+  "social_keywords": [
+    {"id": "iran_hormuz",          "query": "Iran Hormuz",           "enabled": true},
+    {"id": "taiwan_strait_mil_soc", "query": "Taiwan Strait military", "enabled": true},
+    {"id": "dprk_missile_soc",     "query": "DPRK missile",          "enabled": true},
+    {"id": "semiconductor_embargo_soc", "query": "semiconductor embargo", "enabled": true},
+    {"id": "oil_supply_soc",       "query": "oil supply disruption", "enabled": true},
+    {"id": "ukraine_offensive_soc", "query": "Ukraine offensive",    "enabled": true},
+    {"id": "korea_thaad",          "query": "Korea THAAD",           "enabled": true},
+    {"id": "gaza_ceasefire",       "query": "Gaza ceasefire",        "enabled": true}
+  ]
+}

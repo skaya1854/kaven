@@ -16,26 +16,21 @@ from typing import Any
 
 import aiohttp
 
+from src.kaven.config_loader import get_adsb_zones
+
 logger = logging.getLogger("kaven.adsb")
 
-# 감시 공역 정의 (bounding box: lat_min, lat_max, lon_min, lon_max)
-WATCH_AIRSPACES = {
-    "middle_east": {
-        "name": "중동 (이란·이라크·걸프)",
-        "lat_min": 24.0, "lat_max": 38.0,
-        "lon_min": 44.0, "lon_max": 62.0,
-    },
-    "taiwan_strait": {
-        "name": "대만 해협",
-        "lat_min": 22.0, "lat_max": 27.0,
-        "lon_min": 117.0, "lon_max": 122.0,
-    },
-    "korean_peninsula": {
-        "name": "한반도",
-        "lat_min": 33.0, "lat_max": 43.0,
-        "lon_min": 124.0, "lon_max": 132.0,
-    },
-}
+
+def _watch_airspaces() -> dict[str, dict[str, Any]]:
+    """설정 로더로부터 활성화된 ADS-B 감시 공역을 dict로 변환."""
+    zones: dict[str, dict[str, Any]] = {}
+    for z in get_adsb_zones(only_enabled=True):
+        zones[z["id"]] = {
+            "name": z["name"],
+            "lat_min": z["lat_min"], "lat_max": z["lat_max"],
+            "lon_min": z["lon_min"], "lon_max": z["lon_max"],
+        }
+    return zones
 
 # 군용기 ICAO24 hex 범위 (주요 국가)
 # 참고: https://en.wikipedia.org/wiki/List_of_aircraft_registration_prefixes
@@ -59,17 +54,21 @@ async def collect() -> list[dict[str, Any]]:
     """
     username = os.getenv("OPENSKY_USERNAME", "").strip()
     password = os.getenv("OPENSKY_PASSWORD", "").strip()
-    
+
     auth = None
     if username and password:
         auth = aiohttp.BasicAuth(username, password)
     else:
         logger.info("OpenSky 인증 정보 미설정 — 비인증 모드 (rate limit 제한)")
-    
+
     results = []
-    
+    watch_airspaces = _watch_airspaces()
+    if not watch_airspaces:
+        logger.warning("ADS-B 감시 공역이 모두 비활성화됨 — 빈 결과 반환")
+        return []
+
     async with aiohttp.ClientSession() as session:
-        for zone_key, zone_def in WATCH_AIRSPACES.items():
+        for zone_key, zone_def in watch_airspaces.items():
             try:
                 zone_result = await _collect_zone(session, auth, zone_key, zone_def)
                 results.append(zone_result)
@@ -85,7 +84,7 @@ async def collect() -> list[dict[str, Any]]:
                     "error": str(e),
                     "timestamp": datetime.now(timezone.utc).isoformat(),
                 })
-    
+
     return results
 
 
@@ -103,9 +102,9 @@ async def _collect_zone(
         "lomin": zone_def["lon_min"],
         "lomax": zone_def["lon_max"],
     }
-    
+
     now = datetime.now(timezone.utc).isoformat()
-    
+
     try:
         async with session.get(url, params=params, auth=auth, timeout=aiohttp.ClientTimeout(total=30)) as resp:
             if resp.status == 429:
@@ -117,7 +116,7 @@ async def _collect_zone(
                     "status": "rate_limited",
                     "timestamp": now,
                 }
-            
+
             if resp.status != 200:
                 return {
                     "source": "adsb",
@@ -127,7 +126,7 @@ async def _collect_zone(
                     "error": f"HTTP {resp.status}",
                     "timestamp": now,
                 }
-            
+
             data = await resp.json()
     except asyncio.TimeoutError:
         return {
@@ -137,12 +136,12 @@ async def _collect_zone(
             "status": "timeout",
             "timestamp": now,
         }
-    
+
     states = data.get("states", []) or []
-    
+
     # 전체 항공기 수
     total_aircraft = len(states)
-    
+
     # 군용기 필터링
     military_aircraft = []
     for state in states:
@@ -158,17 +157,17 @@ async def _collect_zone(
                 "velocity": state[9],
                 "on_ground": state[8],
             })
-    
+
     # 이상 감지: 군용기 수 임계값
     mil_count = len(military_aircraft)
     anomaly = None
-    
+
     # 군용기 5대 이상이면 주의, 10대 이상이면 경보
     if mil_count >= 10:
         anomaly = "military_surge"
     elif mil_count >= 5:
         anomaly = "military_elevated"
-    
+
     result = {
         "source": "adsb",
         "zone": zone_key,
@@ -179,14 +178,14 @@ async def _collect_zone(
         "anomaly": anomaly,
         "timestamp": now,
     }
-    
+
     if anomaly:
         result["severity_hint"] = 4 if anomaly == "military_surge" else 3
         result["detail"] = (
             f"{zone_def['name']}: 전체 {total_aircraft}기 중 군용기 {mil_count}기 감지"
         )
         logger.warning(f"ADS-B 이상 감지: {result['detail']}")
-    
+
     return result
 
 
@@ -194,14 +193,14 @@ def _is_military_hex(icao24: str) -> bool:
     """ICAO24 hex 코드가 군용기 범위인지 판별."""
     if len(icao24) < 2:
         return False
-    
+
     prefix = icao24[:2]
-    
+
     for _country, ranges in MILITARY_HEX_PREFIXES.items():
         for range_start, range_end in ranges:
             if range_start <= prefix <= range_end:
                 return True
-    
+
     # 추가 휴리스틱: 콜사인에 군용 패턴
     return False
 
