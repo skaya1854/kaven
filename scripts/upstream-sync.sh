@@ -7,7 +7,6 @@
 set -euo pipefail
 
 REPO_DIR="/Users/skaya/Project/kaven"
-LOG_FILE="$HOME/Library/Logs/kaven-sync.log"
 KAVEN_PLIST="$HOME/Library/LaunchAgents/com.skaya.kaven.plist"
 
 # 텔레그램 알림 (kaven .env에서 읽기)
@@ -17,7 +16,7 @@ CHAT_ID="${TELEGRAM_CHAT_ID:-}"
 TOPIC_ID="5052"
 
 log() {
-    echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*" | tee -a "$LOG_FILE"
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*"
 }
 
 notify() {
@@ -37,7 +36,7 @@ log "=== Upstream 동기화 시작 ==="
 
 # 1. upstream fetch
 log "upstream fetch 중..."
-git fetch upstream 2>&1 | tee -a "$LOG_FILE"
+git fetch upstream 2>&1
 
 # 2. 새 커밋 확인
 NEW_COMMITS=$(git log HEAD..upstream/main --oneline 2>/dev/null)
@@ -49,7 +48,7 @@ fi
 
 COMMIT_COUNT=$(echo "$NEW_COMMITS" | wc -l | tr -d ' ')
 log "upstream 새 커밋 ${COMMIT_COUNT}건 감지:"
-echo "$NEW_COMMITS" | head -10 | tee -a "$LOG_FILE"
+echo "$NEW_COMMITS" | head -10
 
 # 3. 로컬 변경 확인 — dirty 상태면 중단
 if [[ -n "$(git status --porcelain 2>/dev/null)" ]]; then
@@ -65,12 +64,12 @@ sleep 2
 
 # 5. 머지 시도
 log "upstream/main 머지 시도..."
-if git merge upstream/main --no-edit 2>&1 | tee -a "$LOG_FILE"; then
+if git merge upstream/main --no-edit 2>&1; then
     log "머지 성공"
 
     # 6. fork에 push
     log "origin(fork)에 push..."
-    git push origin main 2>&1 | tee -a "$LOG_FILE"
+    git push origin main 2>&1
     log "push 완료"
 
     notify "✅ *Kaven Upstream Sync*
