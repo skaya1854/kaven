@@ -1,17 +1,17 @@
 """
-Kaven Analyzer — 수집 데이터 통합 분석 (LLM API)
+Kaven Analyzer — 수집 데이터 통합 분석 (claude -p CLI)
 
-OpenClaw 게이트웨이(localhost:18789) 또는 직접 Anthropic API 호출.
-지정학 이벤트 분석 → 투자 신호 생성.
+claude -p (1순위) → 규칙기반 폴백.
 """
 
+import asyncio
 import json
 import logging
 import os
+import re
+import shutil
 from datetime import datetime, timezone
 from typing import Any
-
-import aiohttp
 
 logger = logging.getLogger("kaven.analyzer")
 
@@ -69,7 +69,7 @@ JSON 배열만 출력하세요. 추가 설명 없이 순수 JSON만."""
 
 
 async def analyze(collected_data: dict[str, Any]) -> list[dict[str, Any]]:
-    """수집된 데이터를 LLM API로 분석."""
+    """수집된 데이터를 claude -p CLI로 분석."""
 
     # 데이터 요약 (토큰 절약)
     summary = _summarize_data(collected_data)
@@ -78,39 +78,15 @@ async def analyze(collected_data: dict[str, Any]) -> list[dict[str, Any]]:
         logger.info("분석할 데이터 없음")
         return []
 
-    # OpenAI 호환 API(로컬 LLM 포함) 우선, Gemini/Anthropic 순으로 폴백
-    openai_base_url = os.getenv("OPENAI_BASE_URL", "").strip().rstrip("/")
-    openai_api_key = os.getenv("OPENAI_API_KEY", "").strip()
-    openai_model = os.getenv("OPENAI_MODEL", "gpt-4o-mini").strip() or "gpt-4o-mini"
-    gemini_key = os.getenv("GEMINI_API_KEY", "").strip()
-    anthropic_key = os.getenv("ANTHROPIC_API_KEY", "").strip()
-
+    # claude -p → 규칙기반 폴백
     result = None
-    if openai_base_url:
-        try:
-            result = await _call_openai_compatible(
-                base_url=openai_base_url,
-                api_key=openai_api_key,
-                model=openai_model,
-                summary=summary,
-            )
-        except Exception as e:
-            logger.warning(f"OpenAI 호환 API 분석 실패: {e}")
-
-    if result is None and gemini_key:
-        try:
-            result = await _call_gemini(gemini_key, summary)
-        except Exception as e:
-            logger.warning(f"Gemini API 분석 실패: {e}")
-
-    if result is None and anthropic_key:
-        try:
-            result = await _call_anthropic_direct(anthropic_key, summary)
-        except Exception as e:
-            logger.error(f"Anthropic 직접 API 분석 실패: {e}")
+    try:
+        result = await _call_claude_cli(summary)
+    except Exception as e:
+        logger.warning(f"claude -p 분석 실패: {e}")
 
     if result is None:
-        logger.error("모든 분석 경로 실패")
+        logger.warning("claude -p 실패 → 규칙기반 폴백")
         result = _fallback_analysis(collected_data)
 
     # 모든 이벤트에 collected_at 주입 (없는 경우 현재 시각)
@@ -137,6 +113,51 @@ async def analyze(collected_data: dict[str, Any]) -> list[dict[str, Any]]:
             event["event_time"] = earliest_pub.isoformat() if earliest_pub else None
 
     return result
+
+
+async def _call_claude_cli(summary: str) -> list[dict] | None:
+    """claude -p CLI를 subprocess로 호출하여 분석."""
+    claude_path = shutil.which("claude") or "/opt/homebrew/bin/claude"
+    if not os.path.isfile(claude_path):
+        logger.error(f"claude CLI를 찾을 수 없음: {claude_path}")
+        return None
+
+    prompt = f"{ANALYSIS_SYSTEM_PROMPT}\n\n{ANALYSIS_USER_PROMPT.format(collected_data=summary)}"
+
+    # LaunchAgent에서는 PATH가 제한적이므로 homebrew 경로 보장
+    env = os.environ.copy()
+    env["PATH"] = "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:" + env.get("PATH", "")
+
+    proc = await asyncio.create_subprocess_exec(
+        claude_path, "-p", prompt,
+        "--output-format", "text",
+        "--max-turns", "1",
+        "--model", "haiku",
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+        env=env,
+    )
+
+    try:
+        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=120)
+    except asyncio.TimeoutError:
+        proc.kill()
+        await proc.communicate()
+        logger.error("claude -p 타임아웃 (120초)")
+        return None
+
+    if proc.returncode != 0:
+        err_msg = stderr.decode("utf-8", errors="replace").strip()
+        logger.error(f"claude -p 종료코드 {proc.returncode}: {err_msg[:300]}")
+        return None
+
+    text = stdout.decode("utf-8", errors="replace").strip()
+    if not text:
+        logger.warning("claude -p 빈 응답")
+        return None
+
+    logger.info(f"claude -p 응답 수신: {len(text)}자")
+    return _parse_analysis_response(text)
 
 
 def _summarize_data(collected_data: dict[str, Any]) -> str:
@@ -191,7 +212,6 @@ def _summarize_data(collected_data: dict[str, Any]) -> str:
     social_data = collected_data.get("social", [])
     real_tweets = [s for s in social_data if s.get("text")]
     if real_tweets:
-        # 고 engagement 순 정렬
         real_tweets.sort(key=lambda x: x.get("engagement", 0), reverse=True)
         parts.append(f"\n## X(Twitter) ({len(real_tweets)}건)")
         for item in real_tweets[:10]:  # 상위 10건
@@ -204,225 +224,59 @@ def _summarize_data(collected_data: dict[str, Any]) -> str:
     return "\n".join(parts)
 
 
-async def _call_openai_compatible(
-    base_url: str,
-    api_key: str,
-    model: str,
-    summary: str,
-) -> list[dict] | None:
-    """OpenAI 호환 Chat Completions API 호출 (로컬 LLM 서버 포함)."""
-    url = f"{base_url}/v1/chat/completions"
-    payload = {
-        "model": model,
-        "temperature": 0.2,
-        "messages": [
-            {"role": "system", "content": ANALYSIS_SYSTEM_PROMPT},
-            {
-                "role": "user",
-                "content": ANALYSIS_USER_PROMPT.format(collected_data=summary),
-            },
-        ],
-    }
-    headers = {"Content-Type": "application/json"}
-    if api_key:
-        headers["Authorization"] = f"Bearer {api_key}"
-
-    async with aiohttp.ClientSession() as session:
-        async with session.post(
-            url,
-            json=payload,
-            headers=headers,
-            timeout=aiohttp.ClientTimeout(total=60),
-        ) as resp:
-            if resp.status != 200:
-                body = await resp.text()
-                logger.warning(f"OpenAI 호환 API {resp.status}: {body[:200]}")
-                return None
-            data = await resp.json()
-
-    choices = data.get("choices", [])
-    if not choices:
-        return None
-
-    message = choices[0].get("message", {})
-    content = message.get("content", "")
-    if isinstance(content, list):
-        text = "".join(
-            c.get("text", "") for c in content if isinstance(c, dict)
-        )
-    else:
-        text = str(content)
-
-    return _parse_analysis_response(text)
-
-
-async def _call_gemini(api_key: str, summary: str) -> list[dict] | None:
-    """Google Gemini API 호출."""
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={api_key}"
-
-    payload = {
-        "contents": [
-            {
-                "role": "user",
-                "parts": [
-                    {"text": f"{ANALYSIS_SYSTEM_PROMPT}\n\n{ANALYSIS_USER_PROMPT.format(collected_data=summary)}"}
-                ],
-            }
-        ],
-        "generationConfig": {
-            "maxOutputTokens": 2000,
-            "temperature": 0.2,
-        },
-    }
-
-    async with aiohttp.ClientSession() as session:
-        async with session.post(
-            url, json=payload,
-            timeout=aiohttp.ClientTimeout(total=60),
-        ) as resp:
-            if resp.status != 200:
-                body = await resp.text()
-                logger.warning(f"Gemini API {resp.status}: {body[:200]}")
-                return None
-
-            data = await resp.json()
-
-    # Gemini 응답에서 텍스트 추출
-    text = ""
-    for candidate in data.get("candidates", []):
-        content = candidate.get("content", {})
-        for part in content.get("parts", []):
-            text += part.get("text", "")
-
-    return _parse_analysis_response(text)
-
-
-async def _call_openclaw_gateway(gateway_url: str, summary: str) -> list[dict] | None:
-    """OpenClaw 게이트웨이의 Messages API 호출."""
-    url = f"{gateway_url}/v1/messages"
-
-    payload = {
-        "model": "anthropic/claude-sonnet-4-6",
-        "max_tokens": 2000,
-        "system": ANALYSIS_SYSTEM_PROMPT,
-        "messages": [
-            {
-                "role": "user",
-                "content": ANALYSIS_USER_PROMPT.format(collected_data=summary),
-            }
-        ],
-    }
-
-    headers = {
-        "Content-Type": "application/json",
-        "x-api-key": "openclaw",
-        "anthropic-version": "2023-06-01",
-    }
-
-    async with aiohttp.ClientSession() as session:
-        async with session.post(
-            url, json=payload, headers=headers,
-            timeout=aiohttp.ClientTimeout(total=60),
-        ) as resp:
-            if resp.status != 200:
-                body = await resp.text()
-                logger.warning(f"OpenClaw gateway {resp.status}: {body[:200]}")
-                return None
-
-            data = await resp.json()
-
-    # Claude 응답에서 텍스트 추출
-    text = ""
-    for block in data.get("content", []):
-        if block.get("type") == "text":
-            text += block.get("text", "")
-
-    return _parse_analysis_response(text)
-
-
-async def _call_anthropic_direct(api_key: str, summary: str) -> list[dict] | None:
-    """Anthropic API 직접 호출."""
-    url = "https://api.anthropic.com/v1/messages"
-
-    payload = {
-        "model": "claude-sonnet-4-20250514",
-        "max_tokens": 2000,
-        "system": ANALYSIS_SYSTEM_PROMPT,
-        "messages": [
-            {
-                "role": "user",
-                "content": ANALYSIS_USER_PROMPT.format(collected_data=summary),
-            }
-        ],
-    }
-
-    headers = {
-        "Content-Type": "application/json",
-        "x-api-key": api_key,
-        "anthropic-version": "2023-06-01",
-    }
-
-    async with aiohttp.ClientSession() as session:
-        async with session.post(
-            url, json=payload, headers=headers,
-            timeout=aiohttp.ClientTimeout(total=60),
-        ) as resp:
-            if resp.status != 200:
-                body = await resp.text()
-                logger.warning(f"Anthropic API {resp.status}: {body[:200]}")
-                return None
-
-            data = await resp.json()
-
-    text = ""
-    for block in data.get("content", []):
-        if block.get("type") == "text":
-            text += block.get("text", "")
-
-    return _parse_analysis_response(text)
-
-
 def _parse_analysis_response(text: str) -> list[dict]:
-    """Claude 응답 텍스트에서 JSON 배열 추출."""
+    """LLM 응답 텍스트에서 JSON 배열 추출."""
+    text = text.replace("\x00", "")
+    text = re.sub(r'"event_Time"', '"event_time"', text)
     text = text.strip()
 
-    # JSON 배열 직접 파싱 시도
+    # 1) 전체가 JSON인 경우
     try:
         result = json.loads(text)
         if isinstance(result, list):
-            return _dedup_events(result)
+            return _dedup_events([e for e in result if isinstance(e, dict)])
         if isinstance(result, dict):
             return [result]
     except json.JSONDecodeError:
         pass
 
-    # 코드블록 내 JSON 추출
+    # 2) 코드블록 내 JSON 추출
     if "```" in text:
-        for block in text.split("```"):
-            block = block.strip()
-            if block.startswith("json"):
-                block = block[4:].strip()
+        for m in re.finditer(r"```(?:json)?\s*([\s\S]*?)```", text):
+            block = m.group(1).strip()
             try:
                 result = json.loads(block)
                 if isinstance(result, list):
-                    return _dedup_events(result)
+                    return _dedup_events([e for e in result if isinstance(e, dict)])
                 if isinstance(result, dict):
                     return [result]
             except json.JSONDecodeError:
                 continue
 
-    # [ ... ] 패턴 찾기
-    start = text.find("[")
-    end = text.rfind("]")
-    if start != -1 and end != -1 and end > start:
+    # 3) 텍스트 내 모든 [ ... ] 후보를 뒤에서부터 시도
+    candidates = []
+    depth = 0
+    start = -1
+    for i, ch in enumerate(text):
+        if ch == "[":
+            if depth == 0:
+                start = i
+            depth += 1
+        elif ch == "]":
+            depth -= 1
+            if depth == 0 and start != -1:
+                candidates.append(text[start:i + 1])
+                start = -1
+
+    for candidate in reversed(candidates):
         try:
-            result = json.loads(text[start:end + 1])
-            if isinstance(result, list):
+            result = json.loads(candidate)
+            if isinstance(result, list) and all(isinstance(e, dict) for e in result):
                 return _dedup_events(result)
         except json.JSONDecodeError:
-            pass
+            continue
 
-    logger.error(f"분석 응답 파싱 실패: {text[:200]}")
+    logger.error(f"분석 응답 파싱 실패: {text[:300]}")
     return []
 
 
@@ -439,7 +293,6 @@ def _dedup_events(events: list[dict]) -> list[dict]:
         if not event_text:
             continue
 
-        # 이미 본 이벤트와 80% 이상 겹치면 중복으로 판단
         is_dup = False
         ev_words = set(event_text.lower().split())
         for seen_text in seen:
@@ -447,7 +300,7 @@ def _dedup_events(events: list[dict]) -> list[dict]:
             if not seen_words:
                 continue
             overlap = len(ev_words & seen_words) / max(len(ev_words | seen_words), 1)
-            if overlap >= 0.6:  # 60% 이상 단어 겹치면 중복
+            if overlap >= 0.6:
                 is_dup = True
                 logger.debug(f"중복 이벤트 제거: '{event_text[:50]}' ≈ '{seen_text[:50]}'")
                 break
@@ -463,7 +316,7 @@ def _dedup_events(events: list[dict]) -> list[dict]:
 
 
 def _fallback_analysis(collected_data: dict[str, Any]) -> list[dict[str, Any]]:
-    """API 호출 실패 시 규칙 기반 분석 (폴백)."""
+    """claude -p 실패 시 규칙 기반 분석 (폴백)."""
     events = []
     now = datetime.now(timezone.utc).isoformat()
 
