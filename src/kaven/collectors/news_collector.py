@@ -15,7 +15,10 @@ from typing import Any
 import aiohttp
 import feedparser
 
-from src.kaven.config_loader import get_news_feeds, get_news_keywords
+try:
+    from src.kaven.config_loader import get_news_feeds, get_news_keywords
+except ModuleNotFoundError:
+    from config_loader import get_news_feeds, get_news_keywords
 
 logger = logging.getLogger("kaven.news")
 

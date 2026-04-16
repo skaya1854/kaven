@@ -21,7 +21,10 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
-from src.kaven.version import __version__
+try:
+    from src.kaven.version import __version__
+except ModuleNotFoundError:
+    from version import __version__
 
 SCRIPT_DIR = Path(__file__).parent
 

@@ -16,7 +16,10 @@ import urllib.request
 from datetime import datetime, timezone
 from typing import Any
 
-from src.kaven.config_loader import get_social_keywords
+try:
+    from src.kaven.config_loader import get_social_keywords
+except ModuleNotFoundError:
+    from config_loader import get_social_keywords
 
 logger = logging.getLogger("kaven.social")
 

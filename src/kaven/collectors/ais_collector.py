@@ -15,7 +15,10 @@ import os
 from datetime import datetime, timezone
 from typing import Any
 
-from src.kaven.config_loader import get_ais_zones
+try:
+    from src.kaven.config_loader import get_ais_zones
+except ModuleNotFoundError:
+    from config_loader import get_ais_zones
 
 logger = logging.getLogger("kaven.ais")
 

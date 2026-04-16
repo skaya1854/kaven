@@ -16,7 +16,10 @@ from typing import Any
 
 import aiohttp
 
-from src.kaven.config_loader import get_adsb_zones
+try:
+    from src.kaven.config_loader import get_adsb_zones
+except ModuleNotFoundError:
+    from config_loader import get_adsb_zones
 
 logger = logging.getLogger("kaven.adsb")
 

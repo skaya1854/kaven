@@ -14,7 +14,10 @@ from typing import Any
 
 import aiohttp
 
-from src.kaven.version import __version__
+try:
+    from src.kaven.version import __version__
+except ModuleNotFoundError:
+    from version import __version__
 
 logger = logging.getLogger("kaven.signal")
 
