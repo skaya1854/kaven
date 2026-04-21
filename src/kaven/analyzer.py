@@ -1,17 +1,17 @@
 """
-Kaven Analyzer — 수집 데이터 통합 분석 (claude -p CLI)
+Kaven Analyzer — 수집 데이터 통합 분석 (로컬 LLM, OpenAI 호환 API)
 
-claude -p (1순위) → 규칙기반 폴백.
+로컬 LLM (1순위) → 규칙기반 폴백.
 """
 
-import asyncio
 import json
 import logging
 import os
 import re
-import shutil
 from datetime import datetime, timezone
 from typing import Any
+
+import aiohttp
 
 logger = logging.getLogger("kaven.analyzer")
 
@@ -69,7 +69,7 @@ JSON 배열만 출력하세요. 추가 설명 없이 순수 JSON만."""
 
 
 async def analyze(collected_data: dict[str, Any]) -> list[dict[str, Any]]:
-    """수집된 데이터를 claude -p CLI로 분석."""
+    """수집된 데이터를 로컬 LLM(OpenAI 호환 API)으로 분석."""
 
     # 데이터 요약 (토큰 절약)
     summary = _summarize_data(collected_data)
@@ -78,15 +78,15 @@ async def analyze(collected_data: dict[str, Any]) -> list[dict[str, Any]]:
         logger.info("분석할 데이터 없음")
         return []
 
-    # claude -p → 규칙기반 폴백
+    # 로컬 LLM → 규칙기반 폴백
     result = None
     try:
-        result = await _call_claude_cli(summary)
+        result = await _call_local_llm(summary)
     except Exception as e:
-        logger.warning(f"claude -p 분석 실패: {e}")
+        logger.warning(f"로컬 LLM 분석 실패: {e}", exc_info=True)
 
     if result is None:
-        logger.warning("claude -p 실패 → 규칙기반 폴백")
+        logger.warning("로컬 LLM 실패 → 규칙기반 폴백")
         result = _fallback_analysis(collected_data)
 
     # 모든 이벤트에 collected_at 주입 (없는 경우 현재 시각)
@@ -115,48 +115,65 @@ async def analyze(collected_data: dict[str, Any]) -> list[dict[str, Any]]:
     return result
 
 
-async def _call_claude_cli(summary: str) -> list[dict] | None:
-    """claude -p CLI를 subprocess로 호출하여 분석."""
-    claude_path = shutil.which("claude") or "/opt/homebrew/bin/claude"
-    if not os.path.isfile(claude_path):
-        logger.error(f"claude CLI를 찾을 수 없음: {claude_path}")
+async def _call_local_llm(summary: str) -> list[dict] | None:
+    """OpenAI 호환 API(로컬 LLM)로 분석 호출."""
+    base_url = os.getenv("OPENAI_BASE_URL", "http://127.0.0.1:8000/v1").strip().rstrip("/")
+    api_key = os.getenv("OPENAI_API_KEY", "skaya").strip()
+    model = os.getenv("OPENAI_MODEL", "Qwen3.6-35B-A3B-MLX-8bit").strip()
+
+    url = f"{base_url}/chat/completions"
+    payload = {
+        "model": model,
+        "temperature": 0.2,
+        "max_tokens": 16000,
+        "messages": [
+            {"role": "system", "content": ANALYSIS_SYSTEM_PROMPT},
+            {
+                "role": "user",
+                "content": ANALYSIS_USER_PROMPT.format(collected_data=summary),
+            },
+        ],
+    }
+    headers = {"Content-Type": "application/json"}
+    if api_key:
+        headers["Authorization"] = f"Bearer {api_key}"
+
+    async with aiohttp.ClientSession() as session:
+        async with session.post(
+            url,
+            json=payload,
+            headers=headers,
+            timeout=aiohttp.ClientTimeout(total=180),
+        ) as resp:
+            if resp.status != 200:
+                body = await resp.text()
+                logger.warning(f"로컬 LLM API {resp.status}: {body[:200]}")
+                return None
+            try:
+                data = await resp.json()
+            except Exception:
+                raw = await resp.text()
+                logger.warning(f"로컬 LLM 응답 JSON 파싱 실패: {raw[:200]}")
+                return None
+
+    choices = data.get("choices", [])
+    if not choices:
+        logger.warning("로컬 LLM 빈 choices")
         return None
 
-    prompt = f"{ANALYSIS_SYSTEM_PROMPT}\n\n{ANALYSIS_USER_PROMPT.format(collected_data=summary)}"
+    message = choices[0].get("message", {})
+    content = message.get("content", "")
+    if isinstance(content, list):
+        text = "".join(c.get("text", "") for c in content if isinstance(c, dict))
+    else:
+        text = str(content)
 
-    # LaunchAgent에서는 PATH가 제한적이므로 homebrew 경로 보장
-    env = os.environ.copy()
-    env["PATH"] = "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:" + env.get("PATH", "")
-
-    proc = await asyncio.create_subprocess_exec(
-        claude_path, "-p", prompt,
-        "--output-format", "text",
-        "--max-turns", "1",
-        "--model", "haiku",
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE,
-        env=env,
-    )
-
-    try:
-        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=120)
-    except asyncio.TimeoutError:
-        proc.kill()
-        await proc.communicate()
-        logger.error("claude -p 타임아웃 (120초)")
-        return None
-
-    if proc.returncode != 0:
-        err_msg = stderr.decode("utf-8", errors="replace").strip()
-        logger.error(f"claude -p 종료코드 {proc.returncode}: {err_msg[:300]}")
-        return None
-
-    text = stdout.decode("utf-8", errors="replace").strip()
+    text = text.strip()
     if not text:
-        logger.warning("claude -p 빈 응답")
+        logger.warning("로컬 LLM 빈 응답")
         return None
 
-    logger.info(f"claude -p 응답 수신: {len(text)}자")
+    logger.info(f"로컬 LLM 응답 수신: {len(text)}자 (model={model})")
     return _parse_analysis_response(text)
 
 
